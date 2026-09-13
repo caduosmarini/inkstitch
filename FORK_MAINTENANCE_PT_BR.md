@@ -173,6 +173,22 @@ powershell -ExecutionPolicy Bypass -File installer_scripts/windows/install-quick
 
 É necessário reiniciar o Inkscape depois de instalar ou remover a barra.
 
+Para acrescentar um bloco expansível com botões de texto dentro do painel
+`Camadas e Objetos`, instale também o lançador do dock:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer_scripts/windows/install-dock-launcher.ps1 `
+  -SourceGlade "C:\caminho\do\Inkscape\share\inkscape\ui\dialog-objects.glade"
+```
+
+O bloco oferece dez ações frequentes e pode ser recolhido pelo título
+`Ink/Stitch`. Ele preserva os controles e a árvore do painel original. Para
+desfazer apenas essa personalização:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer_scripts/windows/install-dock-launcher.ps1 -Remove
+```
+
 ## Texto técnico para futuro pull request
 
 **Title:** Clip Tatami gap-fill rows to the valid fill geometry
