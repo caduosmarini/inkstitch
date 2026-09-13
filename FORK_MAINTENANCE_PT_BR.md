@@ -150,6 +150,29 @@ Copy-Item -LiteralPath $backup -Destination $active -Recurse
 
 Não há atualização automática configurada.
 
+### Barra lateral de acesso rápido no Inkscape 1.4 para Windows
+
+O Inkscape não permite que uma extensão INX registre um painel acoplável como o
+Rastrear bitmap. Para evitar a navegação repetida pelo menu, este fork inclui uma
+personalização reversível da barra lateral nativa, com botões para Parâmetros,
+Simulador, Letras, Anexar comandos, Solução de problemas e Preferências.
+
+Com o Inkscape fechado, execute:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer_scripts/windows/install-quick-access-toolbar.ps1 `
+  -SourceUi "C:\caminho\do\Inkscape\share\inkscape\ui\toolbar-tool.ui"
+```
+
+O instalador preserva qualquer `toolbar-tool.ui` personalizado antes de alterá-lo.
+Para desfazer:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File installer_scripts/windows/install-quick-access-toolbar.ps1 -Remove
+```
+
+É necessário reiniciar o Inkscape depois de instalar ou remover a barra.
+
 ## Texto técnico para futuro pull request
 
 **Title:** Clip Tatami gap-fill rows to the valid fill geometry
