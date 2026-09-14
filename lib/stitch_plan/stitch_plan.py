@@ -8,6 +8,7 @@ from typing import List
 
 from inkex import errormsg
 
+from ..debug.debug import debug
 from ..i18n import _
 from ..svg import PIXELS_PER_MM
 from ..utils.geometry import Point
@@ -15,6 +16,7 @@ from ..utils.threading import check_stop_flag
 from .color_block import ColorBlock
 
 
+@debug.time
 def stitch_groups_to_stitch_plan(stitch_groups, collapse_len=None, min_stitch_len=0.1, disable_ties=False):  # noqa: C901
 
     """Convert a collection of StitchGroups to a StitchPlan.
