@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+
+import argparse
+import re
+from pathlib import Path
+
+from babel.messages.pofile import read_po
+
+
+PRINTF = re.compile(
+    r"%\([^)]+\)[#0 +\-]?(?:\d+|\*)?(?:\.\d+|\.\*)?"
+    r"[hlL]?[diouxXeEfFgGcrsa]|%(?:\d+\$)?[diouxXeEfFgGcrsa]"
+)
+BRACES = re.compile(r"\{[^{}]+\}")
+TAGS = re.compile(r"</?[A-Za-z][^>]*>")
+
+
+def variants(value):
+    if isinstance(value, (tuple, list)):
+        return value
+    return (value,)
+
+
+def validate(path):
+    with path.open("rb") as catalog_file:
+        catalog = read_po(catalog_file, locale="pt_BR")
+
+    errors = []
+    translated = 0
+    fuzzy = 0
+    untranslated = 0
+
+    for message in catalog:
+        if not message.id:
+            continue
+        if "fuzzy" in message.flags:
+            fuzzy += 1
+
+        for error in message.check(catalog):
+            errors.append(("babel", str(message.id), str(error)))
+
+        sources = variants(message.id)
+        targets = variants(message.string)
+        if not message.string or any(not target for target in targets):
+            untranslated += 1
+            continue
+        translated += 1
+
+        for index, target in enumerate(targets):
+            source = sources[min(index, len(sources) - 1)]
+            for name, pattern in (
+                ("printf", PRINTF),
+                ("braces", BRACES),
+                ("tags", TAGS),
+            ):
+                if sorted(pattern.findall(source)) != sorted(
+                    pattern.findall(target)
+                ):
+                    errors.append((name, source, target))
+
+    print(
+        f"entries={len(catalog)} translated={translated} "
+        f"untranslated={untranslated} fuzzy={fuzzy} errors={len(errors)}"
+    )
+    for name, source, target in errors[:20]:
+        print(f"{name}: {source!r} -> {target!r}")
+    return 1 if errors or untranslated or fuzzy else 0
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("catalog", type=Path)
+    args = parser.parse_args()
+    raise SystemExit(validate(args.catalog))
+
+
+if __name__ == "__main__":
+    main()

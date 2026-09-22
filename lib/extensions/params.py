@@ -604,6 +604,7 @@ class SettingsPanel(wx.Panel):
             wx.CallAfter(self._hide_warning)
             last_stitch_group = None
             for element, next_element in zip(elements[:-1], elements[1:]):
+                check_stop_flag()
                 # Making a copy of the embroidery element is an easy
                 # way to drop the cache in the @cache decorators used
                 # for many params in embroider.py.
@@ -612,9 +613,8 @@ class SettingsPanel(wx.Panel):
                 if stitch_groups:
                     last_stitch_group = stitch_groups[-1]
 
-                check_stop_flag()
-
             if stitch_groups:
+                check_stop_flag()
                 return stitch_groups_to_stitch_plan(
                     stitch_groups,
                     collapse_len=self.metadata['collapse_len_mm'],

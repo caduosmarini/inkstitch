@@ -9,6 +9,7 @@ __pycache__
 *.log
 dist/
 build/
+/artifacts/
 locales/
 /inx/
 .pydevproject

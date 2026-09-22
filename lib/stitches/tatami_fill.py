@@ -117,7 +117,7 @@ def tatami_fill(
         return fallback(shape, running_stitch_length, running_stitch_tolerance)
 
     path = find_stitch_path(fill_stitch_graph, travel_graph, starting_point, ending_point, underpath)
-    path = fill_gaps(path, round_to_multiple_of_2(gap_fill_rows))
+    path = fill_gaps(path, round_to_multiple_of_2(gap_fill_rows), shape)
     result = path_to_stitches(shape, path, travel_graph, fill_stitch_graph, angle, row_spacing,
                               max_stitch_length, running_stitch_length, running_stitch_tolerance,
                               staggers, skip_last, underpath, enable_random_stitch_length, random_sigma, random_seed)
@@ -717,7 +717,7 @@ def pick_edge(edges):
     return list(edges)[0]
 
 
-def fill_gaps(path, num_rows):
+def fill_gaps(path, num_rows, shape=None):
     """Fill gaps between sections caused by fabric distortion.
 
     If we stitch some rows back and forth, then travel and stitch another
@@ -763,7 +763,7 @@ def fill_gaps(path, num_rows):
                     # The path has already started traveling on to the new
                     # section, so save it and add it back on after.
                     next_edge = new_path.pop()
-                    fill_gap(new_path, num_rows)
+                    fill_gap(new_path, num_rows, shape)
                     new_path.append(next_edge)
 
                 rows_in_section = 0
@@ -802,12 +802,28 @@ def remove_loops(path):
     return new_path
 
 
-def fill_gap(path, num_rows):
-    """Fill a gap by repeating the last row."""
+def fill_gap(path, num_rows, shape=None):
+    """Fill a gap by repeating the last row inside the fill shape.
+
+    Gap rows are offset copies of the last fill row.  On curves, concavities,
+    and shapes with holes, an unbounded copy can leave the fill area.  Clip
+    every candidate row to the shape and retain only the reachable component.
+    Rows are committed in pairs so that the path can return to the original
+    endpoint without crossing an excluded area.
+
+    ``shape`` remains optional for callers outside tatami fill.  In that case,
+    preserve the historical behavior.
+    """
 
     original_end = path[-1][1]
-    last_row = (InkstitchPoint.from_tuple(path[-1][0]), InkstitchPoint.from_tuple(path[-1][1]))
-    penultimate_row = (InkstitchPoint.from_tuple(path[-3][0]), InkstitchPoint.from_tuple(path[-3][1]))
+    last_row = (
+        InkstitchPoint.from_tuple(path[-1][0]),
+        InkstitchPoint.from_tuple(path[-1][1]),
+    )
+    penultimate_row = (
+        InkstitchPoint.from_tuple(path[-3][0]),
+        InkstitchPoint.from_tuple(path[-3][1]),
+    )
     last_row_direction = (last_row[1] - last_row[0]).unit()
 
     offset_direction = last_row_direction.rotate_left()
@@ -816,7 +832,62 @@ def fill_gap(path, num_rows):
     spacing = (last_row[1] - penultimate_row[0]) * offset_direction
     offset = offset_direction * spacing
 
-    for i in range(num_rows):
+    if shape is None:
+        return _fill_gap_unclipped(
+            path, num_rows, original_end, last_row, offset
+        )
+
+    gap_edges = []
+    current_end = last_row[1]
+
+    # Gap filling always requests an even number of rows.  Work pair by pair
+    # so that an unusable clipped row cannot leave the path stranded.
+    for _ in range(num_rows // 2):
+        pair_edges = []
+        pair_last_row = last_row
+        pair_end = current_end
+
+        for _ in range(2):
+            end, start = pair_last_row
+            ideal_start = start + offset
+            ideal_end = end + offset
+            clipped_row = _reachable_gap_row(
+                shape, pair_end, ideal_start, ideal_end
+            )
+            if clipped_row is None:
+                return _finish_clipped_gap(
+                    path, gap_edges, current_end, original_end
+                )
+
+            start, end = clipped_row
+            if start.distance(pair_end) > 0.01:
+                pair_edges.append(PathEdge(
+                    (pair_end.as_tuple(), start.as_tuple()), 'segment'
+                ))
+            pair_edges.append(PathEdge(
+                (start.as_tuple(), end.as_tuple()), 'segment'
+            ))
+            pair_last_row = (start, end)
+            pair_end = end
+
+        # The original path resumes at original_end.  If the direct return
+        # would cross an exterior or a hole, skip this pair entirely.
+        if not _segment_is_covered(
+            shape, pair_end, InkstitchPoint.from_tuple(original_end)
+        ):
+            break
+
+        gap_edges.extend(pair_edges)
+        last_row = pair_last_row
+        current_end = pair_end
+
+    return _finish_clipped_gap(path, gap_edges, current_end, original_end)
+
+
+def _fill_gap_unclipped(path, num_rows, original_end, last_row, offset):
+    """Historical gap-row generation for callers that do not supply a shape."""
+
+    for _ in range(num_rows):
         # calculate the next row, which looks like the last row, but backward and offset
         end, start = last_row
         start += offset
@@ -835,6 +906,68 @@ def fill_gap(path, num_rows):
     path.append(PathEdge((last_row[1].as_tuple(), original_end), 'segment'))
 
     return path
+
+
+def _finish_clipped_gap(path, gap_edges, current_end, original_end):
+    """Append accepted gap rows and reconnect them to the original path."""
+
+    path.extend(gap_edges)
+    if (
+        gap_edges and
+        current_end.distance(InkstitchPoint.from_tuple(original_end)) > 0.01
+    ):
+        path.append(PathEdge((current_end.as_tuple(), original_end), 'segment'))
+    return path
+
+
+def _reachable_gap_row(shape, current_end, ideal_start, ideal_end):
+    """Return the best clipped row reachable from the current needle point."""
+
+    candidate = shgeo.LineString((ideal_start.as_tuple(), ideal_end.as_tuple()))
+    intersection = candidate.intersection(shape)
+    segments = _line_components(intersection)
+
+    reachable = []
+    for segment in segments:
+        if segment.length <= 0.01:
+            continue
+
+        start = InkstitchPoint.from_tuple(segment.coords[0])
+        end = InkstitchPoint.from_tuple(segment.coords[-1])
+        if end.distance(current_end) < start.distance(current_end):
+            start, end = end, start
+
+        if _segment_is_covered(shape, current_end, start):
+            reachable.append(
+                (current_end.distance(start), -segment.length, start, end)
+            )
+
+    if not reachable:
+        return None
+
+    _, _, start, end = min(reachable, key=lambda item: (item[0], item[1]))
+    return start, end
+
+
+def _line_components(geometry):
+    """Yield LineStrings from any Shapely intersection result."""
+
+    if isinstance(geometry, shgeo.LineString):
+        return [geometry]
+    if isinstance(geometry, (shgeo.MultiLineString, shgeo.GeometryCollection)):
+        return [
+            component
+            for part in geometry.geoms
+            for component in _line_components(part)
+        ]
+    return []
+
+
+def _segment_is_covered(shape, start, end):
+    """Whether a straight stitched connection stays in the valid fill area."""
+
+    segment = shgeo.LineString((start.as_tuple(), end.as_tuple()))
+    return shape.buffer(1e-9).covers(segment)
 
 
 def collapse_sequential_outline_edges(path, graph):

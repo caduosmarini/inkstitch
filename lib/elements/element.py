@@ -34,6 +34,7 @@ from ..svg.tags import INKSCAPE_LABEL, INKSTITCH_ATTRIBS
 from ..utils import DotDict, Point, cache
 from ..utils.cache import (CacheKeyGenerator, get_stitch_plan_cache,
                            is_cache_disabled)
+from ..utils.threading import check_stop_flag
 from .validation import ValidationError, ValidationWarning
 
 
@@ -671,13 +672,15 @@ class EmbroideryElement(object):
     @debug.time
     def _load_cached_stitch_groups(self, previous_stitch, next_element):
         if is_cache_disabled():
-            return None
+            return None, None
 
+        check_stop_flag()
         if not self.uses_previous_stitch():
             # we don't care about the previous stitch
             previous_stitch = None
 
         cache_key = self.get_cache_key(previous_stitch, next_element)
+        check_stop_flag()
         stitch_groups = get_stitch_plan_cache().get(cache_key)
 
         if stitch_groups:
@@ -685,7 +688,7 @@ class EmbroideryElement(object):
         else:
             debug.log(f"did not use cache for {self.node.get('id')} {self.node.get(INKSCAPE_LABEL)}, key={cache_key}")
 
-        return stitch_groups
+        return stitch_groups, cache_key
 
     def uses_previous_stitch(self) -> bool:
         """Returns True if the previous stitch can affect this Element's stitches.
@@ -702,12 +705,16 @@ class EmbroideryElement(object):
         return False
 
     @debug.time
-    def _save_cached_stitch_groups(self, stitch_groups, previous_stitch, next_element):
+    def _save_cached_stitch_groups(self, stitch_groups, previous_stitch,
+                                   next_element, cache_key=None):
         if is_cache_disabled():
             return
 
         stitch_plan_cache = get_stitch_plan_cache()
-        cache_key = self.get_cache_key(previous_stitch, next_element)
+        # On a cache miss, _load_cached_stitch_groups() already generated this
+        # potentially expensive key from path geometry, styles and commands.
+        if cache_key is None:
+            cache_key = self.get_cache_key(previous_stitch, next_element)
         if cache_key not in stitch_plan_cache:
             # fix up colors for cache
             for stitch_group in stitch_groups:
@@ -759,6 +766,7 @@ class EmbroideryElement(object):
     def get_cache_key_data(self, previous_stitch, next_element):
         return []
 
+    @debug.time
     def get_cache_key(self, previous_stitch, next_element):
         cache_key_generator = CacheKeyGenerator()
         cache_key_generator.update(self.__class__.__name__)
@@ -786,16 +794,20 @@ class EmbroideryElement(object):
         debug.log(f"starting {self.node.get('id')} {self.node.get(INKSCAPE_LABEL)}")
 
         with self.handle_unexpected_exceptions():
+            check_stop_flag()
             if last_stitch_group:
                 previous_stitch = last_stitch_group.stitches[-1]
             else:
                 previous_stitch = None
 
-            stitch_groups = self._load_cached_stitch_groups(previous_stitch, next_element)
+            stitch_groups, cache_key = self._load_cached_stitch_groups(
+                previous_stitch, next_element
+            )
 
             if not stitch_groups:
                 self.validate()
 
+                check_stop_flag()
                 stitch_groups = self.to_stitch_groups(last_stitch_group, next_element)
                 apply_patterns(stitch_groups, self.node)
 
@@ -809,7 +821,9 @@ class EmbroideryElement(object):
                     stitch_group.min_jump_stitch_length = self.min_jump_stitch_length
                     stitch_group.set_minimum_stitch_length(self.min_stitch_length)
 
-                self._save_cached_stitch_groups(stitch_groups, previous_stitch, next_element)
+                self._save_cached_stitch_groups(
+                    stitch_groups, previous_stitch, next_element, cache_key
+                )
 
         debug.log(f"ending {self.node.get('id')} {self.node.get(INKSCAPE_LABEL)}")
         return stitch_groups
